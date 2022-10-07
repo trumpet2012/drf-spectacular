@@ -45,6 +45,29 @@ class LanguageChoices(TextChoices):
     EN = 'en'
 
 
+blank_null_language_list = ['en', '', None]
+
+
+class BlankNullLanguageEnum(Enum):
+    EN = 'en'
+    BLANK = ''
+    NULL = None
+
+
+class BlankNullLanguageStrEnum(str, Enum):
+    EN = 'en'
+    BLANK = ''
+    # These will still be included since the values get cast to strings so 'None' != None
+    NULL = None
+
+
+class BlankNullLanguageChoices(TextChoices):
+    EN = 'en'
+    BLANK = ''
+    # These will still be included since the values get cast to strings so 'None' != None
+    NULL = None
+
+
 class ASerializer(serializers.Serializer):
     language = serializers.ChoiceField(choices=language_choices)
     vote = serializers.ChoiceField(choices=vote_choices)
@@ -94,6 +117,32 @@ def test_global_enum_naming_override(no_warnings, clear_caches):
     assert 'LanguageEnum' in schema['components']['schemas']['X']['properties']['foo']['$ref']
     assert 'LanguageEnum' in schema['components']['schemas']['X']['properties']['bar']['$ref']
     assert len(schema['components']['schemas']) == 2
+
+
+@mock.patch('drf_spectacular.settings.spectacular_settings.ENUM_NAME_OVERRIDES', {
+    'LanguageEnum': 'tests.test_postprocessing.BlankNullLanguageChoices'
+})
+def test_global_enum_naming_override_with_blank_and_none(no_warnings, clear_caches):
+    """Test that choices with blank values can still have their name overridden."""
+    class XSerializer(serializers.Serializer):
+        foo = serializers.ChoiceField(choices=BlankNullLanguageChoices.choices)
+        bar = serializers.ChoiceField(choices=BlankNullLanguageChoices.choices)
+
+    class XView(generics.RetrieveAPIView):
+        serializer_class = XSerializer
+
+    schema = generate_schema('/x', view=XView)
+    foo_data = schema['components']['schemas']['X']['properties']['foo']
+    bar_data = schema['components']['schemas']['X']['properties']['bar']
+
+    assert len(foo_data['oneOf']) == 2
+    assert len(bar_data['oneOf']) == 2
+
+    foo_ref_values = [ref_object['$ref'] for ref_object in foo_data['oneOf']]
+    bar_ref_values = [ref_object['$ref'] for ref_object in bar_data['oneOf']]
+
+    assert foo_ref_values == ['#/components/schemas/LanguageEnum', '#/components/schemas/BlankEnum']
+    assert bar_ref_values == ['#/components/schemas/LanguageEnum', '#/components/schemas/BlankEnum']
 
 
 def test_enum_name_reuse_warning(capsys):
@@ -189,6 +238,31 @@ def test_enum_override_variations(no_warnings):
         ):
             load_enum_name_overrides.cache_clear()
             assert list_hash(['en']) in load_enum_name_overrides()
+
+
+def test_enum_override_variations_with_blank_and_null(no_warnings):
+    enum_override_variations = [
+        'blank_null_language_list',
+        'BlankNullLanguageEnum',
+        ('BlankNullLanguageStrEnum', ['en', 'None'])
+    ]
+    if DJANGO_VERSION > '3':
+        enum_override_variations += [
+            ('BlankNullLanguageChoices', ['en', 'None']),
+            ('BlankNullLanguageChoices.choices', ['en', 'None'])
+        ]
+
+    for variation in enum_override_variations:
+        expected_hashed_keys = ['en']
+        if isinstance(variation, (list, tuple, )):
+            variation, expected_hashed_keys = variation
+        with mock.patch(
+            'drf_spectacular.settings.spectacular_settings.ENUM_NAME_OVERRIDES',
+            {'LanguageEnum': f'tests.test_postprocessing.{variation}'}
+        ):
+            load_enum_name_overrides.cache_clear()
+            # Should match after None and blank strings are removed
+            assert list_hash(expected_hashed_keys) in load_enum_name_overrides()
 
 
 @mock.patch('drf_spectacular.settings.spectacular_settings.ENUM_NAME_OVERRIDES', {
